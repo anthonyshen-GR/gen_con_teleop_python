@@ -4,8 +4,8 @@ A collection of Python tools for teleoperating a GenRobot gripper through the **
 
 This repository includes:
 
-- Keyboard-based gripper control
-- Hand-tracking-based gripper control
+- Keyboard-based gripper control for single gripper controller
+- Hand-tracking-based gripper control for single gripper controller
 - An in-progress SDK client
 
 > This repository does not include the GenRobot Gripper Controller Python SDK. Install and configure the SDK separately before using these tools.
