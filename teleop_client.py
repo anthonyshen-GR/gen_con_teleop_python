@@ -8,7 +8,7 @@ over UDP to a driver process (e.g. start_gripper.py) that owns the gripper
 hardware and prints its own encoder readings. That split lets the
 tracking/UI process and the hardware-owning process live on different
 machines, or just keeps camera/UI churn off the process that's talking
-to the serial port.
+to the serial port. Need to modify start_gripper.py to accept teleop CLI. 
 
 Built on the native-Linux display model (see teleop_gripper.py):
 a real cv2 window + cv2.waitKey() for hotkeys, no HTTP MJPEG server and
