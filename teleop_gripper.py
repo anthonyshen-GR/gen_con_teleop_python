@@ -13,16 +13,26 @@ Modes:
     dual gripper: plug in both gripper controllers and drive them with
     both hands at once — your left hand drives the left gripper, your
     right hand drives the right gripper.
-        python3 teleop_gripper.py both
+        python3 teleop_gripper.py dual
 
 Controls (window must be focused):
-    n        -> capture current pinch as CLOSED reference
-    f        -> capture current pinch as OPEN reference
+    n        -> capture current pinch as CLOSED reference (only for hand(s)
+                actually visible in frame right now — see visible_this_frame)
+    f        -> capture current pinch as OPEN reference (same rule)
     SPACE    -> freeze target(s) (ignore hand tracking until pressed again)
     q / ESC  -> disable motor(s) and quit
 
+Calibration in dual mode can be done either simultaneously (both hands in
+frame, pinch both closed, press 'n', spread both open, press 'f') or
+sequentially, one hand at a time (pinch left, press 'n' while your right
+hand types — right hand doesn't need to be in frame; move on to right hand
+next). 'n'/'f' only ever touch hands that are visible in the CURRENT frame,
+so calibrating one hand never overwrites the other hand's calibration with
+a stale reading.
+
 Usage: python teleop_gripper.py left
-       python3 teleop_gripper.py both --left-port /dev/ttyUSB0 --right-port /dev/ttyUSB1
+       python3 teleop_gripper.py dual
+       python3 teleop_gripper.py dual --left-port /dev/ttyUSB0 --right-port /dev/ttyUSB1
 """
 
 import argparse
@@ -91,6 +101,13 @@ class HandTeleopState:
         self.smoothed_ratio = None
         self.calib_near = None
         self.calib_far = None
+        # True only for the frame(s) in which this hand was actually
+        # detected — reset to False every frame before detection runs, and
+        # set True only if this hand shows up in that frame's results.
+        # 'n'/'f' calibration checks this so calibrating one hand can never
+        # silently re-use a stale reading from a hand that isn't currently
+        # in view.
+        self.visible_this_frame = False
 
     def set_target(self, value):
         with self.lock:
@@ -177,7 +194,9 @@ def _apply_calibration(state: HandTeleopState):
 
 
 def _calib_status(state: HandTeleopState) -> str:
-    if state.calib_near and state.calib_far:
+    # Explicit None-checks, not truthiness — a calibrated ratio of exactly
+    # 0.0 (unlikely but not impossible) would otherwise read as uncalibrated.
+    if state.calib_near is not None and state.calib_far is not None:
         return f"CALIBRATED (near={state.calib_near:.2f}, far={state.calib_far:.2f})"
     return "NOT CALIBRATED (press 'n' then 'f')"
 
@@ -195,7 +214,14 @@ def _encoder_str(state: HandTeleopState) -> str:
 def _handle_key(key: int, states: dict) -> bool:
     """Apply a cv2.waitKey() result to one or more labeled HandTeleopState
     objects (e.g. {"L": state_left, "R": state_right}, or just {"": state}
-    for single-gripper mode). Returns False if quit was requested."""
+    for single-gripper mode). Returns False if quit was requested.
+
+    'n'/'f' only touch a state if BOTH its smoothed_ratio is set AND it was
+    actually visible in the current frame (visible_this_frame) — this is
+    what makes sequential one-hand-at-a-time calibration safe in dual mode:
+    calibrating the second hand never silently re-touches the first hand's
+    calibration using an old, no-longer-current reading.
+    """
     if key == -1:
         return True
     ch = chr(key & 0xFF) if 0 <= (key & 0xFF) < 128 else ""
@@ -207,19 +233,23 @@ def _handle_key(key: int, states: dict) -> bool:
     elif ch == "n":
         msg = []
         for label, st in states.items():
-            if st.smoothed_ratio is not None:
+            if st.visible_this_frame and st.smoothed_ratio is not None:
                 st.calib_near = st.smoothed_ratio
                 msg.append(f"{label + '=' if label else ''}{st.calib_near:.3f}")
         if msg:
             print(f"\n>> Calibrated CLOSED: {', '.join(msg)}")
+        else:
+            print("\n>> No visible hand to calibrate — make sure it's in frame.")
     elif ch == "f":
         msg = []
         for label, st in states.items():
-            if st.smoothed_ratio is not None:
+            if st.visible_this_frame and st.smoothed_ratio is not None:
                 st.calib_far = st.smoothed_ratio
                 msg.append(f"{label + '=' if label else ''}{st.calib_far:.3f}")
         if msg:
             print(f"\n>> Calibrated OPEN: {', '.join(msg)}")
+        else:
+            print("\n>> No visible hand to calibrate — make sure it's in frame.")
     elif ch == " ":
         frozen = None
         for st in states.values():
@@ -296,10 +326,13 @@ def run_single(args):
             frame_timestamp_ms += 33
             result = landmarker.detect_for_video(mp_image, frame_timestamp_ms)
 
+            state.visible_this_frame = False
+
             if result.hand_landmarks:
                 lm = result.hand_landmarks[0]
                 h, w, _ = frame.shape
                 pts = [(p.x * w, p.y * h) for p in lm]
+                state.visible_this_frame = True
                 _draw_hand(frame, pts)
                 _update_ratio_from_landmarks(frame, pts, state)
 
@@ -349,7 +382,11 @@ def run_single(args):
 
 def run_dual(args):
     """Dual-gripper hand-pinch teleop, native-Linux flavor: left hand ->
-    left gripper, right hand -> right gripper, shown in one OpenCV window."""
+    left gripper, right hand -> right gripper, shown in one OpenCV window.
+
+    Calibration ('n'/'f') can be done with both hands in frame at once, or
+    one hand at a time (see module docstring) — visible_this_frame on each
+    HandTeleopState is what makes the one-at-a-time flow safe."""
     left_port = args.left_port or SIDE_PORTS["left"]
     right_port = args.right_port or SIDE_PORTS["right"]
 
@@ -435,12 +472,14 @@ def run_dual(args):
 
             h, w, _ = frame.shape
             seen = {"Left": False, "Right": False}
+            state_left.visible_this_frame = False
+            state_right.visible_this_frame = False
 
             if result.hand_landmarks:
                 for idx, lm in enumerate(result.hand_landmarks):
-                    # See teleop_gripper.py's run_dual() for why mirrored
-                    # (selfie-view) handedness maps directly to the user's
-                    # own left/right hand here.
+                    # See module docstring for why mirrored (selfie-view)
+                    # handedness maps directly to the user's own left/right
+                    # hand here.
                     label = "Left"
                     if result.handedness and idx < len(result.handedness):
                         label = result.handedness[idx][0].category_name
@@ -449,6 +488,7 @@ def run_dual(args):
 
                     state = state_left if label == "Left" else state_right
                     seen[label] = True
+                    state.visible_this_frame = True
 
                     pts = [(p.x * w, p.y * h) for p in lm]
                     _draw_hand(frame, pts)
@@ -507,28 +547,28 @@ def run_dual(args):
 
 def build_arg_parser():
     parser = argparse.ArgumentParser(description="Webcam hand-pinch teleop (native Linux version)")
-    parser.add_argument("side", choices=["left", "right", "both"],
-                         help="Which gripper to drive. 'both' teleops left+right "
+    parser.add_argument("side", choices=["left", "right", "dual"],
+                         help="Which gripper to drive. 'dual' teleops left+right "
                               "grippers at once with your left/right hands.")
     parser.add_argument("--port", type=str, default=None,
                          help="Serial port override for single-gripper mode (left/right).")
     parser.add_argument("--left-port", type=str, default=None,
-                         help="Serial port override for the left gripper in 'both' mode.")
+                         help="Serial port override for the left gripper in 'dual' mode.")
     parser.add_argument("--right-port", type=str, default=None,
-                         help="Serial port override for the right gripper in 'both' mode.")
+                         help="Serial port override for the right gripper in 'dual' mode.")
     parser.add_argument("--gripper-type", type=str, default="default_gripper")
     parser.add_argument("--webcam-index", type=int, default=0)
     parser.add_argument("--smoothing", type=float, default=0.4)
     parser.add_argument("--hz", type=float, default=30.0)
     parser.add_argument("--invert-hands", action="store_true",
-                         help="'both' mode only: swap which detected hand "
+                         help="'dual' mode only: swap which detected hand "
                               "(Left/Right) drives which gripper.")
     return parser
 
 
 def main():
     args = build_arg_parser().parse_args()
-    if args.side == "both":
+    if args.side == "dual":
         run_dual(args)
     else:
         run_single(args)
