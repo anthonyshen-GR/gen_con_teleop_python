@@ -27,8 +27,17 @@ Controls:
     SPACE    -> freeze target(s) (ignore hand tracking until pressed again)
     q / ESC  -> disable motor(s) and quit
 
-Usage: python3 teleop_gripper_WSL.py left
-       python3 teleop_gripper_WSL.py both --left-port /dev/ttyUSB0 --right-port /dev/ttyUSB1
+Dependencies:
+    pip install opencv-python mediapipe numpy
+    pip install pyserial  # for DataBus
+    pip install mdeiapipe tasks  # for HandLandmarker
+
+Usage: 
+    python3 teleop_gripper_WSL.py left
+    python3 teleop_gripper_WSL.py both --left-port /dev/ttyUSB0 --right-port /dev/ttyUSB1
+
+usbipd attachments (in Windows host PowerShell) for WSL2: 
+    usbipd attach --wsl --busid <BUSID>  # for each gripper controller
 """
 
 import argparse
