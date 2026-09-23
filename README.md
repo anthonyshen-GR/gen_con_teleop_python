@@ -1,6 +1,6 @@
 # GenRobot Gripper Teleoperation Tools
 
-A collection of Python tools for teleoperating a GenRobot gripper through the **GenRobot Gripper Controller Python SDK**.
+A collection of Python tools for teleoperating a GenRobot gripper through the **GenRobot Gripper Controller Python SDK** https://github.com/genrobot-ai/gen_con_sdk_python_release.
 
 This repository includes:
 
